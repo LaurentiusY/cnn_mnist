@@ -5,13 +5,80 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 
-# 1. 超参数设置
+MNIST_TYPES = [str(i) for i in range(10)]
+
+# 1. 超参数设置（可在 CLI 中修改）
 batch_size = 64
 learning_rate = 1e-3
 num_epochs = 5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
+
+
+def prompt_mnist_type():
+    print("MNIST types:", ", ".join(MNIST_TYPES))
+    while True:
+        selected = input("Which type to use? (0-9): ").strip()
+        if selected in MNIST_TYPES:
+            return int(selected)
+        print("Invalid type. Please enter a digit from 0 to 9.")
+
+
+def prompt_hyperparameters():
+    global batch_size, learning_rate, num_epochs
+    while True:
+        print("\nDefault hyperparameters:")
+        print("1) batch_size =", batch_size, "(range: 1-1024)")
+        print("2) learning_rate =", learning_rate, "(range: 1e-6 to 1.0)")
+        print("3) num_epochs =", num_epochs, "(range: 1-100)")
+
+        change = input("Change hyperparameter? (y/n): ").strip().lower()
+        if change == "n":
+            return
+        if change != "y":
+            print("Please enter 'y' or 'n'.")
+            continue
+
+        choice = input("Which hyperparameter to change? (1-3): ").strip()
+        if choice == "1":
+            new_val = input("New batch_size (1-1024): ").strip()
+            try:
+                new_val_int = int(new_val)
+            except ValueError:
+                print("Invalid integer.")
+                continue
+            if not (1 <= new_val_int <= 1024):
+                print("Out of range.")
+                continue
+            batch_size = new_val_int
+        elif choice == "2":
+            new_val = input("New learning_rate (1e-6 to 1.0): ").strip()
+            try:
+                new_val_float = float(new_val)
+            except ValueError:
+                print("Invalid float.")
+                continue
+            if not (1e-6 <= new_val_float <= 1.0):
+                print("Out of range.")
+                continue
+            learning_rate = new_val_float
+        elif choice == "3":
+            new_val = input("New num_epochs (1-100): ").strip()
+            try:
+                new_val_int = int(new_val)
+            except ValueError:
+                print("Invalid integer.")
+                continue
+            if not (1 <= new_val_int <= 100):
+                print("Out of range.")
+                continue
+            num_epochs = new_val_int
+        else:
+            print("Invalid choice. Please enter 1, 2, or 3.")
+            continue
+
+        print("change complete")
 
 
 # 2. 数据预处理和 DataLoader
@@ -34,19 +101,6 @@ test_dataset = datasets.MNIST(
     transform=transform,
     download=True
 )
-
-train_loader = DataLoader(
-    dataset=train_dataset,
-    batch_size=batch_size,
-    shuffle=True
-)
-
-test_loader = DataLoader(
-    dataset=test_dataset,
-    batch_size=batch_size,
-    shuffle=False
-)
-
 
 # 3. 定义模型：简单 CNN
 # 输入：1 x 28 x 28 灰度图
@@ -78,15 +132,6 @@ class SimpleCNN(nn.Module):
         x = x.view(x.size(0), -1)         # 展平为 (batch_size, 64*7*7)
         x = self.fc_layers(x)             # 线性层
         return x                          # 返回 logits
-
-
-model = SimpleCNN().to(device)
-print(model)
-
-
-# 4. 损失函数和优化器
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 
 # 5. 训练一个 epoch 的函数
@@ -153,56 +198,64 @@ def evaluate(model, dataloader, criterion, device):
     return epoch_loss, epoch_acc
 
 
-# 7. 主训练循环
-best_test_acc = 0.0
+def filter_dataset_by_digit(dataset, digit):
+    indices = []
+    for idx in range(len(dataset)):
+        _, target = dataset[idx]
+        if target == digit:
+            indices.append(idx)
+    return torch.utils.data.Subset(dataset, indices)
 
-for epoch in range(num_epochs):
-    train_loss, train_acc = train_one_epoch(
-        model, train_loader, criterion, optimizer, device
+
+def main():
+    selected_digit = prompt_mnist_type()
+    prompt_hyperparameters()
+
+    train_subset = filter_dataset_by_digit(train_dataset, selected_digit)
+    test_subset = filter_dataset_by_digit(test_dataset, selected_digit)
+
+    train_loader = DataLoader(
+        dataset=train_subset,
+        batch_size=batch_size,
+        shuffle=True
     )
-    test_loss, test_acc = evaluate(
-        model, test_loader, criterion, device
+    test_loader = DataLoader(
+        dataset=test_subset,
+        batch_size=batch_size,
+        shuffle=False
     )
 
-    print(
-        f"Epoch [{epoch+1}/{num_epochs}] "
-        f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} "
-        f"| Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}"
-    )
-
-    # 简单保存“最好”的模型
-    if test_acc > best_test_acc:
-        best_test_acc = test_acc
-        torch.save(model.state_dict(), "best_mnist_cnn.pth")
-        print(f"  -> New best model saved with acc {best_test_acc:.4f}")
-
-
-print("Training finished. Best Test Acc:", best_test_acc)
-
-
-# 8. 演示如何加载已保存的模型权重
-def load_trained_model(weight_path, device):
     model = SimpleCNN().to(device)
-    state_dict = torch.load(weight_path, map_location=device)
-    model.load_state_dict(state_dict)
-    model.eval()
-    return model
+    print(model)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    print("model is training, please wait")
+
+    best_test_acc = 0.0
+    for epoch in range(num_epochs):
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, criterion, optimizer, device
+        )
+        test_loss, test_acc = evaluate(
+            model, test_loader, criterion, device
+        )
+
+        print(
+            f"Epoch [{epoch+1}/{num_epochs}] "
+            f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} "
+            f"| Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}"
+        )
+
+        if test_acc > best_test_acc:
+            best_test_acc = test_acc
+            torch.save(model.state_dict(), "best_mnist_cnn.pth")
+            print(f"  -> New best model saved with acc {best_test_acc:.4f}")
+
+    print("training completed")
+    print(f"Accuracy for type {selected_digit}: {best_test_acc:.4f}")
 
 
-# 可选：加载后对单个样本做预测
 if __name__ == "__main__":
-    # 示例：从测试集中拿一个 batch，看前 8 张的预测
-    example_loader = DataLoader(test_dataset, batch_size=8, shuffle=True)
-    images, labels = next(iter(example_loader))
-    images = images.to(device)
-    labels = labels.to(device)
-
-    # 加载最优模型
-    model = load_trained_model("best_mnist_cnn.pth", device)
-
-    with torch.no_grad():
-        outputs = model(images)
-        _, predicted = outputs.max(1)
-
-    print("Ground truth labels: ", labels.cpu().numpy().tolist())
-    print("Predicted labels:    ", predicted.cpu().numpy().tolist())
+    main()
